@@ -103,14 +103,15 @@
     async function loadPatrolData(){
       if(!activeSiteId){findings=[];checkedIds=new Set();renderChecklist();renderFindings();notice('現場を追加してください。',true);return;}
       notice('読み込み中です。');
+      const siteId=activeSiteId;
       const date=$('patrolDate').value||today();
       const pair=await Promise.all([
-        client.from('patrol_checks').select('check_item_id,is_checked').eq('site_id',activeSiteId).eq('patrol_date',date),
-        client.from('patrol_findings').select('*').eq('site_id',activeSiteId).order('patrol_date',{ascending:false}).order('created_at',{ascending:false})
+        client.from('patrol_checks').select('check_item_id,is_checked').eq('site_id',siteId).eq('patrol_date',date),
+        client.from('patrol_findings').select('*').eq('site_id',siteId).order('patrol_date',{ascending:false}).order('created_at',{ascending:false})
       ]);
-      if(pair[0].error||pair[1].error){notice('データを読み込めませんでした：'+((pair[0].error||pair[1].error).message),true);return;}
-      checkedIds=new Set((pair[0].data||[]).filter(function(row){return row.is_checked;}).map(function(row){return row.check_item_id;}));
-      findings=await Promise.all((pair[1].data||[]).map(async function(item){
+      if(pair[0].error||pair[1].error){if(siteId===activeSiteId)notice('データを読み込めませんでした：'+((pair[0].error||pair[1].error).message),true);return;}
+      const loadedCheckedIds=new Set((pair[0].data||[]).filter(function(row){return row.is_checked;}).map(function(row){return row.check_item_id;}));
+      const loadedFindings=await Promise.all((pair[1].data||[]).map(async function(item){
         const beforePath=item.before_photo_path||item.photo_path,afterPath=item.after_photo_path;
         const signed=await Promise.all([
           beforePath?client.storage.from('patrol-photos').createSignedUrl(beforePath,3600):Promise.resolve({data:null}),
@@ -121,6 +122,9 @@
           after_photo_url:signed[1].data&&signed[1].data.signedUrl?signed[1].data.signedUrl:''
         });
       }));
+      if(siteId!==activeSiteId||date!==($('patrolDate').value||today()))return;
+      checkedIds=loadedCheckedIds;
+      findings=loadedFindings;
       renderChecklist();renderFindings();notice('');
     }
     function renderChecklist(){
@@ -323,6 +327,8 @@
       clearTimeout(reportSaveTimer);
       if(previousSiteId)await saveReportForSite(previousSiteId,reportValues());
       activeSiteId=$('site').value;
+      findings=[];checkedIds=new Set();renderChecklist();renderFindings();
+      $('participants').value='';$('reportOverview').value='';$('workStatus').value='';
       await Promise.all([loadPatrolData(),loadReportForSite(activeSiteId)]);
     };$('patrolDate').onchange=loadPatrolData;$('add').onclick=function(){openFinding(null);};$('findingForm').onsubmit=saveFinding;$('closeFinding').onclick=$('cancelFinding').onclick=function(){$('findingDialog').close();};
     $('beforePhoto').onchange=function(e){newBeforePhotoFile=e.target.files[0]||null;if(!newBeforePhotoFile)return;const reader=new FileReader();reader.onload=function(){$('beforePreview').innerHTML='<img class="photo-preview" src="'+reader.result+'" alt="選択した是正前写真">';};reader.readAsDataURL(newBeforePhotoFile);};

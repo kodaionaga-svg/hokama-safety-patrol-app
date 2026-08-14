@@ -346,8 +346,24 @@
       const slots=[2,12,22,32,42,52];for(let i=0;i<Math.min(findings.length,6);i++){const item=findings[i],r=slots[i];photos.getCell(r+9,1).value='対応前写真';photos.getCell(r+9,7).value='対応後写真';if(item.before_photo_url){try{photos.addImage(await excelImage(workbook,item.before_photo_url),{tl:{col:0,row:r},ext:{width:280,height:150}});}catch(e){}}if(item.after_photo_url){try{photos.addImage(await excelImage(workbook,item.after_photo_url),{tl:{col:5,row:r},ext:{width:280,height:150}});}catch(e){}}}
       const buffer=await workbook.xlsx.writeBuffer(),link=document.createElement('a');link.href=URL.createObjectURL(new Blob([buffer]));link.download=(siteName||'現場')+'_安全衛生パトロール報告.xlsx';link.click();
     }
-    function loadReportForSite(){['participants','reportOverview','workStatus'].forEach(function(id){const el=$(id);if(el)el.value=localStorage.getItem('safety_patrol_'+activeSiteId+'_'+id)||'';});}
-    ['participants','reportOverview','workStatus'].forEach(function(id){const el=$(id);if(el)el.oninput=function(){localStorage.setItem('safety_patrol_'+activeSiteId+'_'+id,el.value);};});
+    let reportSaveTimer=null;
+    async function loadReportForSite(){
+      if(!activeSiteId)return;
+      const result=await client.from('patrol_report_settings').select('*').eq('site_id',activeSiteId).maybeSingle();
+      if(result.error){notice('報告書設定を読み込めませんでした: '+result.error.message,true);return;}
+      const setting=result.data||{};
+      $('participants').value=setting.participants||'';
+      $('reportOverview').value=setting.report_overview||'';
+      $('workStatus').value=setting.work_status||'';
+    }
+    async function saveReportForSite(){
+      if(!activeSiteId)return;
+      const result=await client.from('patrol_report_settings').upsert({
+        site_id:activeSiteId,participants:$('participants').value||'',report_overview:$('reportOverview').value||'',work_status:$('workStatus').value||'',updated_at:new Date().toISOString()
+      },{onConflict:'site_id'});
+      if(result.error)notice('報告書設定を保存できませんでした: '+result.error.message,true);
+    }
+    ['participants','reportOverview','workStatus'].forEach(function(id){const el=$(id);if(el)el.oninput=function(){clearTimeout(reportSaveTimer);reportSaveTimer=setTimeout(saveReportForSite,500);};});
     if($('site'))$('site').addEventListener('change',loadReportForSite);
     $('reportTabResult').onclick=function(){$('reportPanelResult').hidden=false;$('reportPanelPhotos').hidden=true;$('reportTabResult').classList.add('active');$('reportTabPhotos').classList.remove('active');};
     $('reportTabPhotos').onclick=function(){$('reportPanelResult').hidden=true;$('reportPanelPhotos').hidden=false;$('reportTabPhotos').classList.add('active');$('reportTabResult').classList.remove('active');};

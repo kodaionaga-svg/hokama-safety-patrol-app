@@ -318,7 +318,13 @@
       finally{button.disabled=false;}
     }
 
-    $('site').onchange=function(){activeSiteId=$('site').value;loadPatrolData();};$('patrolDate').onchange=loadPatrolData;$('add').onclick=function(){openFinding(null);};$('findingForm').onsubmit=saveFinding;$('closeFinding').onclick=$('cancelFinding').onclick=function(){$('findingDialog').close();};
+    $('site').onchange=async function(){
+      const previousSiteId=activeSiteId;
+      clearTimeout(reportSaveTimer);
+      if(previousSiteId)await saveReportForSite(previousSiteId,reportValues());
+      activeSiteId=$('site').value;
+      await Promise.all([loadPatrolData(),loadReportForSite(activeSiteId)]);
+    };$('patrolDate').onchange=loadPatrolData;$('add').onclick=function(){openFinding(null);};$('findingForm').onsubmit=saveFinding;$('closeFinding').onclick=$('cancelFinding').onclick=function(){$('findingDialog').close();};
     $('beforePhoto').onchange=function(e){newBeforePhotoFile=e.target.files[0]||null;if(!newBeforePhotoFile)return;const reader=new FileReader();reader.onload=function(){$('beforePreview').innerHTML='<img class="photo-preview" src="'+reader.result+'" alt="選択した是正前写真">';};reader.readAsDataURL(newBeforePhotoFile);};
     $('afterPhoto').onchange=function(e){newAfterPhotoFile=e.target.files[0]||null;if(!newAfterPhotoFile)return;const reader=new FileReader();reader.onload=function(){$('afterPreview').innerHTML='<img class="photo-preview" src="'+reader.result+'" alt="選択した是正後写真">';};reader.readAsDataURL(newAfterPhotoFile);};
     $('manageSites').onclick=function(){renderSiteList();$('siteDialog').showModal();};$('closeSites').onclick=$('doneSites').onclick=function(){$('siteDialog').close();};$('addSite').onclick=addSite;
@@ -347,26 +353,30 @@
       const buffer=await workbook.xlsx.writeBuffer(),link=document.createElement('a');link.href=URL.createObjectURL(new Blob([buffer]));link.download=(siteName||'現場')+'_安全衛生パトロール報告.xlsx';link.click();
     }
     let reportSaveTimer=null;
-    async function loadReportForSite(){
-      if(!activeSiteId)return;
-      const result=await client.from('patrol_report_settings').select('*').eq('site_id',activeSiteId).maybeSingle();
+    function reportValues(){return {participants:$('participants').value||'',report_overview:$('reportOverview').value||'',work_status:$('workStatus').value||''};}
+    async function loadReportForSite(siteId){
+      const requestedSiteId=siteId||activeSiteId;
+      if(!requestedSiteId)return;
+      const result=await client.from('patrol_report_settings').select('*').eq('site_id',requestedSiteId).maybeSingle();
       if(result.error){notice('報告書設定を読み込めませんでした: '+result.error.message,true);return;}
+      if(requestedSiteId!==activeSiteId)return;
       const setting=result.data||{};
       $('participants').value=setting.participants||'';
       $('reportOverview').value=setting.report_overview||'';
       $('workStatus').value=setting.work_status||'';
     }
-    async function saveReportForSite(){
-      if(!activeSiteId)return;
+    async function saveReportForSite(siteId,values){
+      const targetSiteId=siteId||activeSiteId;
+      if(!targetSiteId)return;
+      const report=values||reportValues();
       const result=await client.from('patrol_report_settings').upsert({
-        site_id:activeSiteId,participants:$('participants').value||'',report_overview:$('reportOverview').value||'',work_status:$('workStatus').value||'',updated_at:new Date().toISOString()
+        site_id:targetSiteId,participants:report.participants,report_overview:report.report_overview,work_status:report.work_status,updated_at:new Date().toISOString()
       },{onConflict:'site_id'});
       if(result.error)notice('報告書設定を保存できませんでした: '+result.error.message,true);
       else notice('報告書設定を保存しました。');
     }
     ['participants','reportOverview','workStatus'].forEach(function(id){const el=$(id);if(el)el.oninput=function(){clearTimeout(reportSaveTimer);reportSaveTimer=setTimeout(saveReportForSite,500);};});
     $('saveReportSettings').onclick=saveReportForSite;
-    if($('site'))$('site').addEventListener('change',loadReportForSite);
     $('reportTabResult').onclick=function(){$('reportPanelResult').hidden=false;$('reportPanelPhotos').hidden=true;$('reportTabResult').classList.add('active');$('reportTabPhotos').classList.remove('active');};
     $('reportTabPhotos').onclick=function(){$('reportPanelResult').hidden=true;$('reportPanelPhotos').hidden=false;$('reportTabPhotos').classList.add('active');$('reportTabResult').classList.remove('active');};
     async function exportExcel(){

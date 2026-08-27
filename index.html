@@ -347,44 +347,47 @@
       finally{button.disabled=false;}
     }
 
-    // 現場ごとの報告書設定（古い出力コードは下部でコメント化されているため、ここで有効な処理を定義する）
-    let reportSaveTimer=null;
+    // 現場・巡回日ごとの報告書設定
+    let reportSaveTimer=null,displayedReportDate=null;
+    const REPORT_DATES_PREFIX='__safety_report_by_date__:';
     function reportValues(){return {participants:$('participants').value||'',report_overview:$('reportOverview').value||'',work_status:$('workStatus').value||''};}
-    function reportStorageKey(siteId){return 'safety-patrol-report-settings:'+siteId;}
+    function reportDatesFromCloud(setting){
+      try{const raw=setting&&setting.report_overview||'';return raw.indexOf(REPORT_DATES_PREFIX)===0?JSON.parse(raw.slice(REPORT_DATES_PREFIX.length)):{};}catch(e){return {};}
+    }
+    function applyReportValues(values){const setting=values||{};$('participants').value=setting.participants||'';$('reportOverview').value=setting.report_overview||'';$('workStatus').value=setting.work_status||'';}
     async function loadReportForSite(siteId){
       const requestedSiteId=siteId||activeSiteId;
       if(!requestedSiteId)return;
-      const cached=JSON.parse(localStorage.getItem(reportStorageKey(requestedSiteId))||'{}');
-      $('participants').value=cached.participants||'';$('reportOverview').value=cached.report_overview||'';$('workStatus').value=cached.work_status||'';
+      const reportDate=$('patrolDate').value||today();displayedReportDate=reportDate;applyReportValues({});
       const result=await client.from('patrol_report_settings').select('*').eq('site_id',requestedSiteId).maybeSingle();
-      if(result.error){notice('報告書設定はこの端末の保存内容を表示しています。',true);return;}
-      if(requestedSiteId!==activeSiteId)return;
-      const setting=result.data||{};
-      $('participants').value=setting.participants||'';
-      $('reportOverview').value=setting.report_overview||'';
-      $('workStatus').value=setting.work_status||'';
-      localStorage.setItem(reportStorageKey(requestedSiteId),JSON.stringify(setting));
+      if(result.error){notice('報告書設定を読み込めませんでした：'+result.error.message,true);return;}
+      if(requestedSiteId!==activeSiteId||reportDate!==($('patrolDate').value||today()))return;
+      const setting=result.data||{},dates=reportDatesFromCloud(setting),values=dates[reportDate]||(!String(setting.report_overview||'').startsWith(REPORT_DATES_PREFIX)?setting:null);
+      if(values)applyReportValues(values);
     }
-    async function saveReportForSite(siteId,values){
+    async function saveReportForSite(siteId,date,showNotice){
       const targetSiteId=siteId||activeSiteId;
       if(!targetSiteId)return;
-      const report=values||reportValues();
-      localStorage.setItem(reportStorageKey(targetSiteId),JSON.stringify(report));
-      const result=await client.from('patrol_report_settings').upsert({site_id:targetSiteId,participants:report.participants,report_overview:report.report_overview,work_status:report.work_status,updated_at:new Date().toISOString()},{onConflict:'site_id'});
-      if(result.error)notice('報告書設定はこの端末に保存しました（共有保存に失敗）：'+result.error.message,true);
-      else notice('報告書設定を保存しました。');
+      const targetDate=date||displayedReportDate||$('patrolDate').value||today(),values=reportValues();
+      const existing=await client.from('patrol_report_settings').select('*').eq('site_id',targetSiteId).maybeSingle();
+      if(existing.error){notice('報告書設定を保存できませんでした：'+existing.error.message,true);return;}
+      const dates=reportDatesFromCloud(existing.data||{});
+      if(!Object.keys(dates).length&&existing.data&&!String(existing.data.report_overview||'').startsWith(REPORT_DATES_PREFIX))dates[targetDate]={participants:existing.data.participants||'',report_overview:existing.data.report_overview||'',work_status:existing.data.work_status||''};
+      dates[targetDate]=values;
+      const result=await client.from('patrol_report_settings').upsert({site_id:targetSiteId,participants:'',report_overview:REPORT_DATES_PREFIX+JSON.stringify(dates),work_status:'',updated_at:new Date().toISOString()},{onConflict:'site_id'});
+      if(result.error)notice('報告書設定を保存できませんでした：'+result.error.message,true);else if(showNotice)notice('報告書設定を保存しました。');
     }
     ['participants','reportOverview','workStatus'].forEach(function(id){const el=$(id);if(el)el.oninput=function(){clearTimeout(reportSaveTimer);reportSaveTimer=setTimeout(saveReportForSite,500);};});
-    $('saveReportSettings').onclick=saveReportForSite;
+    $('saveReportSettings').onclick=function(){saveReportForSite(null,null,true);};
     $('site').onchange=async function(){
       const previousSiteId=activeSiteId;
       clearTimeout(reportSaveTimer);
-      if(previousSiteId)await saveReportForSite(previousSiteId,reportValues());
+      if(previousSiteId)await saveReportForSite(previousSiteId,displayedReportDate);
       activeSiteId=$('site').value;
       findings=[];checkedIds=new Set();renderChecklist();renderFindings();
       $('participants').value='';$('reportOverview').value='';$('workStatus').value='';
       await Promise.all([loadPatrolData(),loadReportForSite(activeSiteId)]);
-    };$('patrolDate').onchange=function(){calendarMonth=new Date(($('patrolDate').value||today())+'T00:00:00');renderPatrolCalendar();loadPatrolData();};$('calendarPrev').onclick=function(){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1);renderPatrolCalendar();};$('calendarNext').onclick=function(){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1);renderPatrolCalendar();};$('add').onclick=function(){openFinding(null);};$('findingForm').onsubmit=saveFinding;$('closeFinding').onclick=$('cancelFinding').onclick=function(){$('findingDialog').close();};
+    };$('patrolDate').onchange=function(){const previousDate=displayedReportDate;clearTimeout(reportSaveTimer);saveReportForSite(activeSiteId,previousDate);calendarMonth=new Date(($('patrolDate').value||today())+'T00:00:00');renderPatrolCalendar();loadPatrolData();loadReportForSite(activeSiteId);};$('calendarPrev').onclick=function(){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1);renderPatrolCalendar();};$('calendarNext').onclick=function(){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1);renderPatrolCalendar();};$('add').onclick=function(){openFinding(null);};$('findingForm').onsubmit=saveFinding;$('closeFinding').onclick=$('cancelFinding').onclick=function(){$('findingDialog').close();};
     $('beforePhoto').onchange=function(e){newBeforePhotoFile=e.target.files[0]||null;if(!newBeforePhotoFile)return;const reader=new FileReader();reader.onload=function(){$('beforePreview').innerHTML='<img class="photo-preview" src="'+reader.result+'" alt="選択した是正前写真">';};reader.readAsDataURL(newBeforePhotoFile);};
     $('afterPhoto').onchange=function(e){newAfterPhotoFile=e.target.files[0]||null;if(!newAfterPhotoFile)return;const reader=new FileReader();reader.onload=function(){$('afterPreview').innerHTML='<img class="photo-preview" src="'+reader.result+'" alt="選択した是正後写真">';};reader.readAsDataURL(newAfterPhotoFile);};
     $('manageSites').onclick=function(){renderSiteList();$('siteDialog').showModal();};$('closeSites').onclick=$('doneSites').onclick=function(){$('siteDialog').close();};$('addSite').onclick=addSite;
